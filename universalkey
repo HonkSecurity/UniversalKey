@@ -1,0 +1,502 @@
+#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
+
+# Short python import
+import threading
+import sys
+import hashlib
+import argon2
+import bcrypt
+import time
+
+# Long python import
+from typing import Any
+from pathlib import Path
+
+
+class Global:
+
+    # Predefined wordlist paths
+    JOHN = "/usr/share/john/password.lst"
+    SQLMAP = "/usr/share/sqlmap/data/txt/wordlist.txt"
+    ROCKYOU = "/usr/share/wordlists/rockyou.txt"
+
+    # Usage information
+    OPTIONS = {
+        "-h, --help": "Show this help message and exit",
+        "-c, --crack [...]": "Specify the hash to crack",
+        "-t, --type [...]": "Specify the hash type (e.g., md5, sha256)",
+        "-w, --wordlist [...]": "Specify the wordlist file path",
+        "-s, --salt [...]": "Specify the salt value",
+        "-p, --position [...]": "The salt position (prefix/suffix)",
+        "--threads [...]": "Specify number of threads (default: 10)",
+        "-o, --output [...]": "Specify output file",
+    }
+
+    # Flags dictionary
+    FLAGS: dict[str, Any] = {}
+
+    # Cracked key storage
+    CRACKED_KEY: list[str] = []
+
+    # Print usage information
+    @classmethod
+    def print_usage(cls) -> None:
+        print("Usage: universalkey [key] [value] ...")
+        print("Options:")
+
+        for flag, description in cls.OPTIONS.items():
+            print(f"  {flag:<25} {description}")
+
+    # Print banner
+    @staticmethod
+    def print_banner() -> None:
+        print("Universal Key v1.0 - The goose that cracks your base.")
+        print("HonkSecurity (c) 2025" + "\n")
+
+
+class Hash:
+
+    @staticmethod
+    def sha_crack(
+        hash: Any,
+        data: str,
+        salt: str | None,
+        length: str,
+        position: Any
+    ) -> None:
+
+        # Prepend salt if provided
+        if salt is not None:
+            if position == "prefix":
+                data = salt + data
+            elif position == "suffix":
+                data = data + salt
+
+        sha_method = getattr(hashlib, f'sha{length}', None)
+        if sha_method is None:
+            raise ValueError(f"Unsupported SHA length: {length}")
+
+        # Generate the SHA hash
+        sha_hash = sha_method(data.encode()).hexdigest()
+
+        # Compare with the provided hash
+        if sha_hash != hash:
+            return
+
+        # Match found
+        print(f" - {data:<25} => {sha_hash}")
+
+        # Store cracked hash
+        Global.CRACKED_KEY.append(f" - {data:<20} -> {sha_hash}")
+
+    @staticmethod
+    def md5_crack(
+        hash: Any,
+        data: str,
+        salt: str | None,
+        position: Any
+    ) -> None:
+
+        # Prepend salt if provided
+        if salt is not None:
+            if position == "prefix":
+                data = salt + data
+            elif position == "suffix":
+                data = data + salt
+
+        # Generate the MD5 hash
+        md5_hash = hashlib.md5(data.encode()).hexdigest()
+
+        # Compare with the provided hash
+        if md5_hash != hash:
+            return
+
+        # Match found
+        print(f" - {data:<25} => {md5_hash}")
+
+        # Store cracked hash
+        Global.CRACKED_KEY.append(f" - {data:<20} -> {md5_hash}")
+
+    @staticmethod
+    def bcrypt_crack(
+        hash: Any,
+        data: str,
+        salt: str | None
+    ) -> None:
+
+        # Ensure salt is provided
+        if salt is None:
+            raise ValueError("Salt must be provided for bcrypt hash cracking.")
+
+        # Generate the bcrypt hash
+        bcrypt_hash = bcrypt.hashpw(data.encode(), salt.encode()).decode()
+
+        # Compare with the provided hash
+        if bcrypt_hash != hash:
+            return
+
+        # Match found
+        print(f" - {data:<25} => {bcrypt_hash}")
+
+        # Store cracked hash
+        Global.CRACKED_KEY.append(f" - {data:<20} -> {bcrypt_hash}")
+
+    @staticmethod
+    def argon2_crack(
+        hash: Any,
+        data: str,
+        salt: str | None,
+        position: Any
+    ) -> None:
+
+        # Prepend salt if provided
+        if salt is not None:
+            if position == "prefix":
+                data = salt + data
+            elif position == "suffix":
+                data = data + salt
+
+        # Create an Argon2 hasher instance
+        ph = argon2.PasswordHasher()
+
+        # Generate the Argon2 hash
+        argon2_hash = ph.hash(data)
+
+        # Compare with the provided hash
+        if argon2_hash != hash:
+            return
+
+        # Match found
+        print(f" - {data:<25} => {argon2_hash}")
+
+        # Store cracked hash
+        Global.CRACKED_KEY.append(f" - {data:<20} -> {argon2_hash}")
+
+
+class UniversalKey:
+
+    def __init__(self):
+        # Raise value error if the value of required flags is not present
+        if not self.check_required_flags():
+            message = "Error: Missing required options."
+            message += "\n"
+            message += "Message: You must provide at least the"
+            message += " hash to crack, the hash type, and the wordlist."
+            message += "\n"
+            raise ValueError(message)
+
+        # Get value by function
+        self.crack = self.hashfileorstring()
+        self.wordlist = self.wordlistfile()
+
+        # Get value by dictionary
+        self.type = Global.FLAGS["type"]
+        self.salt = Global.FLAGS["salt"]
+        self.position = Global.FLAGS["position"]
+        self.threads = Global.FLAGS["threads"]
+        self.output = Global.FLAGS["output"]
+
+        # Print banner
+        Global.print_banner()
+
+    def hashfileorstring(self) -> str | list[str]:
+        hash: Any = Global.FLAGS.get("crack")
+        file = Path(hash)
+
+        if file.exists() and file.is_file():
+            hashes: list[str] = []
+            with file.open("r", encoding="utf-8") as f:
+                for line in f:
+                    hashes.append(line.strip())
+            return hashes
+        else:
+            return str(Global.FLAGS.get("crack"))
+
+    def wordlistfile(self) -> list[str]:
+
+        # Initialize empty word list
+        words: list[str] = []
+
+        # Get the wordlist path from flags
+        path: Any = Global.FLAGS.get("wordlist")
+
+        if "," in path:
+            paths = path.split(",")
+            for p in paths:
+                file = Path(getattr(Global, p.upper(), p))
+                if file.exists() and file.is_file():
+                    with file.open(
+                        "r",
+                        encoding="utf-8",
+                        errors="ignore"
+                    ) as f:
+                        for line in f:
+                            if "#!comment:" in line:
+                                continue
+                            words.append(line.strip())
+                else:
+                    print(f"Error: Wordlist file '{p}' not found.")
+                    raise SystemExit
+
+        elif path.upper() in ["JOHN", "SQLMAP", "ROCKYOU"]:
+            file = Path(getattr(Global, path.upper()))
+            if file.exists() and file.is_file():
+                with file.open("r", encoding="utf-8", errors="ignore") as f:
+                    for line in f:
+                        if "#!comment:" in line:
+                            continue
+                        words.append(line.strip())
+            else:
+                print(f"Error: Wordlist file '{path}' not found.")
+                raise SystemExit
+
+        else:
+            file = Path(path)
+            if file.exists() and file.is_file():
+                with file.open("r", encoding="utf-8", errors="ignore") as f:
+                    for line in f:
+                        words.append(line.strip())
+            else:
+                print(f"Error: Wordlist file '{path}' not found.")
+                raise SystemExit
+
+        # Return the compiled word list
+        return words
+
+    def check_required_flags(self) -> bool:
+        """Check if all required flags are present."""
+
+        # Define required flags
+        required = ["c", "t", "w", "crack", "type", "wordlist"]
+
+        # Get short and long flags value
+        keys = Global.FLAGS.keys()
+        required = [x for x in keys if x in required]
+
+        values = [Global.FLAGS[key] for key in required]
+        for i in values:
+            if not i:
+                return False
+
+        # Return true if everything is present
+        return True
+
+    def Main(self):
+
+        # Print output location if specified
+        if self.output:
+            print(f"[*] Saving cracked hashes to: {self.output}")
+
+        # Print the total entries of wordlist
+        print(f"[*] Wordlist loaded with {len(self.wordlist)} entries.")
+
+        # Print hash type
+        print(f"[*] Hash type: {str(self.type).lower()}")
+
+        # Print salt
+        if self.salt:
+            print(f"[*] Using salt: {self.salt}")
+            print(f"[*] Salt position: {self.position}")
+
+        # Multiple hashes from file
+        if isinstance(self.crack, list):
+            print(f"[*] Loaded {len(self.crack)} hashes from file.")
+            print(f"[*] Using {self.threads} thread(s) for cracking.")
+
+            # Start the cracking process
+            print("\n" + "Starting the cracking process..." + "\n")
+
+            threads_list: list[threading.Thread] = []
+            for hash in self.crack:
+                if threading.active_count() > self.threads:
+                    while threading.active_count() > self.threads:
+                        time.sleep(5)
+
+                # Start a new thread for each hash
+                thread = threading.Thread(
+                    target=self.hash_crack,
+                    args=(hash,),
+                    daemon=True
+                )
+                thread.start()
+                threads_list.append(thread)
+
+            # Wait for all threads to complete
+            for thread in threads_list:
+                thread.join()
+
+            # Print the total cracked hashes
+            print("\n" + f"[*] Cracked hashes: {len(Global.CRACKED_KEY)}")
+
+            # Return
+            return self.write_output()
+
+        # Single hash case
+        else:
+            print(f"[*] Hash to crack: {self.crack}")
+            print("[!] Single thread cracking")
+
+            # Start the cracking process
+            print("\n" + "Starting the cracking process..." + "\n")
+
+            # Crack the hash
+            self.hash_crack(self.crack)
+
+            # Return
+            return self.write_output()
+
+    def write_output(self) -> None:
+        if self.output:
+            with open(
+                self.output,
+                "w",
+                encoding="utf-8",
+                errors="ignore"
+            ) as f:
+                for i in Global.CRACKED_KEY:
+                    f.write(f"{i}\n")
+
+    def hash_crack(self, hash: str) -> None:
+        """Start cracking multiple hashes."""
+        for word in self.wordlist:
+            if self.type == "md5":
+                Hash.md5_crack(
+                    hash,
+                    word,
+                    self.salt,
+                    self.position
+                )
+            elif self.type.startswith("sha"):
+                length = self.type.replace("sha", "")
+                Hash.sha_crack(
+                    hash,
+                    word,
+                    self.salt,
+                    length,
+                    self.position
+                )
+            elif self.type == "bcrypt":
+                Hash.bcrypt_crack(
+                    hash,
+                    word,
+                    self.salt
+                )
+            elif self.type == "argon2":
+                Hash.argon2_crack(
+                    hash,
+                    word,
+                    self.salt,
+                    self.position
+                )
+
+
+class Arguments:
+
+    def __init__(self):
+
+        # Define available options
+        self.options = {
+            "-h": "help",
+            "--help": "help",
+            "-c": "crack",
+            "--crack": "crack",
+            "-t": "type",
+            "--type": "type",
+            "-w": "wordlist",
+            "--wordlist": "wordlist",
+            "-s": "salt",
+            "--salt": "salt",
+            "-p": "position",
+            "--position": "position",
+            "--threads": "threads",
+            "-o": "output",
+            "--output": "output",
+        }
+
+        # Default parsed values
+        self.parsed: dict[str, Any] = {
+            "help": False,
+            "crack": None,
+            "type": None,
+            "wordlist": None,
+            "salt": None,
+            "position": "prefix",
+            "threads": 10,
+            "output": None,
+        }
+
+    def parse(self, argv: list[str]) -> dict[str, Any]:
+        iterator = iter(argv)
+        for arg in iterator:
+            if arg in ("-h", "--help"):
+                self.parsed["help"] = True
+                continue
+
+            if arg in self.options:
+                key = self.options[arg]
+
+                # flags that require a value
+                if key not in ("help",):
+                    try:
+                        value = next(iterator)
+                        if "-" in value or "--" in value:
+                            raise ValueError(f"Missing value for {arg}.")
+                    except StopIteration:
+                        raise ValueError(f"Missing value for {arg}.")
+
+                    # cast threads to int
+                    if key == "threads":
+                        try:
+                            value = int(value)
+                        except ValueError:
+                            raise ValueError("threads requires an integer.")
+
+                    # validate position
+                    if key == "position":
+                        if value not in ("prefix", "suffix"):
+                            raise ValueError("position must be prefix/suffix.")
+
+                    self.parsed[key] = value
+            else:
+                raise ValueError(f"Unknown argument: {arg}.")
+        return self.parsed
+
+
+if __name__ == "__main__":
+    parser = Arguments()
+    try:
+        args = parser.parse(sys.argv[1:])
+
+        # Handle help request
+        if args["help"]:
+
+            # Print help message
+            Global.print_banner()
+            Global.print_usage()
+
+            # Raise SystemExit safely
+            raise SystemExit
+
+        # Store parsed flags in Data class and remove help flag
+        Global.FLAGS = args
+        del Global.FLAGS["help"]
+
+        # Start main program
+        universal_key = UniversalKey()
+        universal_key.Main()
+
+    except ValueError as ve:
+
+        # Print error and usage
+        Global.print_banner()
+        if str(ve) != "":
+            print(str(ve))
+        Global.print_usage()
+
+        # Raise SystemExit safely
+        raise SystemExit
+
+    except Exception as e:
+        print(f"Error: {e}")
+        raise SystemExit
