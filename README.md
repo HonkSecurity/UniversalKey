@@ -3,4 +3,6 @@ A simple hash-cracking tool that uses multiple threads to speed up checking pass
 
 ## Example
 ![Example](imgs/IuSbqjLp.jpeg)
+
+## Output
 ![Example](imgs/4tt96Z0d.jpeg)
